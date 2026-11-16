@@ -654,6 +654,19 @@ public class PlayerPatch : PatchImpl<PlayerPatch>
                 return default;
 
             VectorLF3 baseDir = toTarget.normalized;
+
+            // The mecha can be inside several path radii at once. Stars and planets keep priority over
+            // hives: a hive's range is wide enough to cover a whole planet, and leaving the hive first
+            // can steer a mecha that has just taken off back into the ground.
+            // Among stars and planets, a moon close to its gas giant puts a mecha on the moon inside both
+            // ranges, and the giant comes first in the list. Leaving only the giant sends a mecha that
+            // takes off from the moon's giant-facing side back into the ground, because "away from the
+            // giant" points down there. Leave all of them together, each weighted by how deep the mecha
+            // is inside its range: their safety margins are equal, so the nearest surface dominates.
+            VectorLF3 bodiesInward = default;
+            VectorLF3 hiveInward = default;
+            bool insideBody = false;
+            bool insideHive = false;
             foreach (Obstacle obstacle in obstacles)
             {
                 double pathRadius = GetReachablePathRadius(obstacle);
@@ -662,10 +675,34 @@ public class PlayerPatch : PatchImpl<PlayerPatch>
 
                 VectorLF3 toObstacle = obstacle.Position - playerPos;
                 double obstacleDistance = toObstacle.magnitude;
-                if (obstacleDistance < pathRadius)
-                    return ComputeEscapeDirection(currentDirection, toObstacle, baseDir);
+                if (obstacleDistance >= pathRadius)
+                    continue;
+
+                if (obstacle.HasSurface)
+                {
+                    bodiesInward += SafeNorm(toObstacle, baseDir) * (pathRadius - obstacleDistance);
+                    insideBody = true;
+                }
+                else if (!insideHive)
+                {
+                    hiveInward = toObstacle;
+                    insideHive = true;
+                }
+            }
+
+            if (insideBody)
+                return ComputeEscapeDirection(currentDirection, bodiesInward, baseDir);
+            if (insideHive)
+                return ComputeEscapeDirection(currentDirection, hiveInward, baseDir);
+
+            foreach (Obstacle obstacle in obstacles)
+            {
+                double pathRadius = GetReachablePathRadius(obstacle);
+                if (pathRadius <= 0.0)
+                    continue;
+
                 if (IsSegmentBlocked(playerPos, _targetUniversePosition, obstacle.Position, pathRadius))
-                    return ComputeTangentDirection(currentDirection, toObstacle, pathRadius, baseDir);
+                    return ComputeTangentDirection(currentDirection, obstacle.Position - playerPos, pathRadius, baseDir);
             }
 
             return baseDir;
@@ -1125,6 +1162,7 @@ public class PlayerPatch : PatchImpl<PlayerPatch>
     {
         public VectorLF3 Position   { get; } = position;
         public double    PathRadius { get; } = radius + safetyMargin;
+        public bool      HasSurface { get; } = radius > 0.0;
     }
 
     #endregion
